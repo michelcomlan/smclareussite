@@ -1,7 +1,27 @@
 # Guide de déploiement — SMC la Réussite
 
 Correspond à l'étape 7 du cahier des charges. À suivre dans cet ordre :
-back-end d'abord (le front a besoin de son URL), puis front, puis domaine.
+mise sur GitHub, puis back-end (le front a besoin de son URL), puis front,
+puis domaine.
+
+## -1. Mettre le code sur GitHub
+
+Le projet livré contient déjà un dépôt Git initialisé (un premier commit
+propre, sans aucun secret — seuls les fichiers `.env.example` sont suivis,
+jamais les vrais `.env`).
+
+1. Créer un nouveau dépôt vide sur [github.com](https://github.com/new)
+   (ne PAS cocher "Initialize with README" pour éviter un conflit).
+2. Depuis le dossier du projet (celui qui contient `smc-backend/` et
+   `smc-frontend/`) :
+   ```bash
+   git remote add origin https://github.com/<votre-compte>/smc-la-reussite.git
+   git branch -M main
+   git push -u origin main
+   ```
+3. Se connecter avec un compte GitHub personnel (pas de compte partagé
+   nécessaire) — Render et Vercel se connecteront ensuite directement à ce
+   dépôt pour déployer automatiquement à chaque mise à jour du code.
 
 ## 0. Prérequis
 
