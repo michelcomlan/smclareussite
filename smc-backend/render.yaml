@@ -1,0 +1,38 @@
+# Déploiement automatisé sur Render (https://render.com)
+# Dans le tableau de bord Render : New > Blueprint, pointer vers ce repo.
+# Sinon, configurer manuellement un "Web Service" avec les mêmes valeurs.
+
+services:
+  - type: web
+    name: smc-la-reussite-backend
+    runtime: node
+    plan: free
+    rootDir: smc-backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 4000
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 12h
+      - key: FEDAPAY_SECRET_KEY
+        sync: false
+      - key: FEDAPAY_ENV
+        value: sandbox
+      - key: FEDAPAY_WEBHOOK_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SMS_PROVIDER
+        value: console
+      - key: SMS_API_URL
+        sync: false
+      - key: SMS_API_KEY
+        sync: false

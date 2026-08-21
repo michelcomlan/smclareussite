@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-creme-50 text-encre-900 font-body antialiased;
+}
+
+/* Focus visible clair sur toute l'app — accessibilité clavier */
+:focus-visible {
+  outline: 3px solid #4F46E5;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Élément signature : la fiche QCM traitée comme un ticket d'examen.
+   Bord supérieur perforé (pointillés) + encoches latérales, comme un
+   ticket qu'on détache pour "entrer" dans le quiz.
+   ------------------------------------------------------------------ */
+.ticket-qcm {
+  position: relative;
+  border-radius: 0 0 14px 14px;
+  background: white;
+  border: 1.5px solid #211C33;
+  border-top: none;
+}
+
+.ticket-qcm::before {
+  content: '';
+  position: absolute;
+  top: -1.5px;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 2px dashed #211C33;
+}
+
+/* Encoches semi-circulaires façon perforation de ticket, en haut à gauche/droite */
+.ticket-qcm::after {
+  content: '';
+  position: absolute;
+  top: -9px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 16px);
+  height: 1px;
+}
+
+.ticket-notch-left,
+.ticket-notch-right {
+  position: absolute;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  background: #FFFCF2;
+  border-radius: 50%;
+  border: 1.5px solid #211C33;
+}
+.ticket-notch-left { left: -10px; }
+.ticket-notch-right { right: -10px; }
+
+/* Sceau circulaire indiquant le niveau (L / M) */
+.sceau-niveau {
+  @apply flex items-center justify-center rounded-full font-display font-semibold;
+  width: 3rem;
+  height: 3rem;
+  border: 2px solid currentColor;
+  box-shadow: inset 0 0 0 3px #FFFCF2, inset 0 0 0 4px currentColor;
+}
