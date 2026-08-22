@@ -26,8 +26,13 @@ async function getAchatValide(achat_id, token_acces) {
 
 /**
  * GET /api/quiz/:qcm_id?achat_id=...&token_acces=...
- * Renvoie les questions du QCM SANS les bonnes réponses.
- * Accès vérifié côté serveur via l'achat confirmé — jamais via le front seul.
+ * Renvoie les questions du QCM AVEC leur réponse rédigée.
+ *
+ * Contrairement à un QCM à choix multiples, envoyer la réponse dès le
+ * chargement n'est pas un problème de sécurité ici : il n'y a rien à
+ * "deviner". Le principe du mode fiches est que l'étudiant choisit
+ * lui-même quand révéler la réponse (côté front), puis s'auto-évalue.
+ * L'accès reste vérifié côté serveur via l'achat confirmé.
  */
 router.get('/:qcm_id', async (req, res) => {
   const { achat_id, token_acces } = req.query;
@@ -42,7 +47,7 @@ router.get('/:qcm_id', async (req, res) => {
 
   const { data: questions, error } = await supabase
     .from('question')
-    .select('id, ordre, enonce, options') // PAS index_bonne_reponse
+    .select('id, ordre, enonce, reponse, sous_categorie, difficulte, points, temps_limite')
     .eq('qcm_id', qcm_id)
     .order('ordre');
 
@@ -53,10 +58,13 @@ router.get('/:qcm_id', async (req, res) => {
 
 /**
  * POST /api/quiz/:qcm_id/soumettre
- * body: { achat_id, token_acces, reponses: [{ question_id, index_choisi }] }
+ * body: { achat_id, token_acces, reponses: [{ question_id, reussi: true|false }] }
  *
- * Le score est calculé côté serveur à partir des bonnes réponses en base —
- * jamais fait confiance à un score envoyé par le client.
+ * "reussi" est l'auto-évaluation de l'étudiant (pas de correction
+ * automatique possible sur une réponse rédigée libre). Le score final
+ * est le nombre de fiches marquées "réussi", calculé côté serveur à
+ * partir de ce que le client envoie (il n'y a pas de "triche" possible
+ * ici puisque l'étudiant s'auto-évalue de toute façon).
  */
 router.post('/:qcm_id/soumettre', async (req, res) => {
   const { qcm_id } = req.params;
@@ -73,25 +81,21 @@ router.post('/:qcm_id/soumettre', async (req, res) => {
 
   const { data: questions, error } = await supabase
     .from('question')
-    .select('id, enonce, options, index_bonne_reponse')
+    .select('id, enonce, reponse')
     .eq('qcm_id', qcm_id);
 
   if (error) return res.status(500).json({ error: 'Erreur serveur.' });
 
-  const bonneReponseParId = new Map(questions.map((q) => [q.id, q.index_bonne_reponse]));
+  const questionParId = new Map(questions.map((q) => [q.id, q]));
 
   let score = 0;
-  const detail = reponses.map((r) => {
-    const bonneReponse = bonneReponseParId.get(r.question_id);
-    const correct = bonneReponse !== undefined && bonneReponse === r.index_choisi;
-    if (correct) score += 1;
-    return {
-      question_id: r.question_id,
-      index_choisi: r.index_choisi,
-      index_bonne_reponse: bonneReponse,
-      correct,
-    };
-  });
+  const detail = reponses
+    .filter((r) => questionParId.has(r.question_id))
+    .map((r) => {
+      const reussi = !!r.reussi;
+      if (reussi) score += 1;
+      return { question_id: r.question_id, reussi };
+    });
 
   const { data: tentative, error: insertError } = await supabase
     .from('tentative_quiz')

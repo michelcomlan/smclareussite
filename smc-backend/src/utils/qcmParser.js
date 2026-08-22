@@ -1,135 +1,115 @@
 /**
- * Parseur de texte structuré au format supposé d'export QCMmaker.
+ * Parseur du format RÉEL d'export QCMmaker (vérifié sur un fichier réel).
  *
- * ⚠️ IMPORTANT : ce parseur est basé sur le format DÉCRIT dans le cahier
- * des charges (Q: ... / A) B) C) D) ... / étoile = bonne réponse), qui est
- * une hypothèse. Avant de mettre ce parseur en production, il FAUT le
- * confronter à un vrai fichier exporté par QCMmaker et l'ajuster en
- * conséquence (voir README.md, section "Point de vigilance import QCM").
+ * Format : un fichier .json contenant un tableau d'objets, chacun avec au
+ * minimum "text" (la question) et "answer" (la réponse rédigée) :
  *
- * Format attendu, exemple :
+ * [
+ *   {
+ *     "text": "Qu'est-ce que l'environnement de l'entreprise ?",
+ *     "answer": "L'environnement de l'entreprise est l'ensemble des éléments...",
+ *     "domain": "Management des organisations",
+ *     "subCategory": "Environnement de l'entreprise",
+ *     "difficulty": "Facile",
+ *     "points": 10,
+ *     "timeLimit": 50
+ *   },
+ *   ...
+ * ]
  *
- * Q: Quelle est la capitale du Bénin ?
- * A) Cotonou
- * B) Porto-Novo *
- * C) Parakou
- * D) Abomey
- *
- * Q: 2 + 2 = ?
- * A) 3
- * B) 4 *
- * C) 5
- * D) 6
- *
- * La bonne réponse est repérée par une étoile "*" en fin (ou début) de ligne.
+ * Il ne s'agit PAS de choix multiples : chaque question a une seule réponse
+ * rédigée. Le site fonctionne en mode "fiches de révision" (l'étudiant lit
+ * la question, essaie de répondre, révèle la réponse, puis s'auto-évalue).
  */
-
-const QUESTION_PREFIX = /^Q\s*:\s*/i;
-const OPTION_LINE = /^([A-Z])\s*[)\.]\s*(.+)$/;
 
 /**
- * @param {string} rawText - Texte brut collé/importé par l'admin.
- * @returns {{ questions: Array, errors: Array }}
- *   questions: [{ enonce, options: string[], indexBonneReponse: number }]
- *   errors: liste de messages décrivant les blocs qui n'ont pas pu être
- *           parsés correctement (pour affichage dans l'aperçu admin).
+ * @param {string} rawJson - Contenu brut du fichier .json importé par l'admin.
+ * @returns {{ questions: Array, errors: Array, domaineDetecte: string|null }}
+ *   questions: [{ ordre, enonce, reponse, sousCategorie, difficulte, points, tempsLimite }]
+ *   errors: liste de messages décrivant les entrées qui n'ont pas pu être
+ *           utilisées (pour affichage dans l'aperçu admin).
+ *   domaineDetecte: la valeur "domain" la plus fréquente parmi les questions
+ *           valides (utile pour présélectionner la matière côté admin), ou
+ *           null si aucune n'est cohérente.
  */
-function parseQcmText(rawText) {
-  if (!rawText || typeof rawText !== 'string') {
-    return { questions: [], errors: ['Texte vide ou invalide.'] };
+function parseQcmJson(rawJson) {
+  if (!rawJson || typeof rawJson !== 'string') {
+    return { questions: [], errors: ['Fichier vide ou invalide.'], domaineDetecte: null };
   }
 
-  // Découpage en blocs : chaque bloc commence par une ligne "Q:"
-  const lines = rawText.replace(/\r\n/g, '\n').split('\n');
-
-  const blocks = [];
-  let currentBlock = null;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed === '') continue;
-
-    if (QUESTION_PREFIX.test(trimmed)) {
-      if (currentBlock) blocks.push(currentBlock);
-      currentBlock = { questionLine: trimmed.replace(QUESTION_PREFIX, ''), optionLines: [] };
-    } else if (currentBlock) {
-      currentBlock.optionLines.push(trimmed);
-    }
-    // Les lignes avant la première "Q:" sont ignorées.
+  let data;
+  try {
+    data = JSON.parse(rawJson);
+  } catch (e) {
+    return {
+      questions: [],
+      errors: [`Le fichier n'est pas un JSON valide (${e.message}).`],
+      domaineDetecte: null,
+    };
   }
-  if (currentBlock) blocks.push(currentBlock);
+
+  if (!Array.isArray(data)) {
+    return {
+      questions: [],
+      errors: ['Le fichier doit contenir un tableau de questions ([...]).'],
+      domaineDetecte: null,
+    };
+  }
 
   const questions = [];
   const errors = [];
+  const domaineCompte = new Map();
 
-  blocks.forEach((block, blockIndex) => {
-    const questionNumber = blockIndex + 1;
-    const enonce = block.questionLine.trim();
+  data.forEach((item, i) => {
+    const numero = i + 1;
+    if (!item || typeof item !== 'object') {
+      errors.push(`Entrée ${numero} : format invalide, ignorée.`);
+      return;
+    }
+
+    const enonce = typeof item.text === 'string' ? item.text.trim() : '';
+    const reponse = typeof item.answer === 'string' ? item.answer.trim() : '';
 
     if (!enonce) {
-      errors.push(`Question ${questionNumber} : énoncé vide, ignorée.`);
+      errors.push(`Entrée ${numero} : champ "text" manquant ou vide, ignorée.`);
+      return;
+    }
+    if (!reponse) {
+      errors.push(`Entrée ${numero} : champ "answer" manquant ou vide, ignorée.`);
       return;
     }
 
-    const options = [];
-    let indexBonneReponse = -1;
-
-    block.optionLines.forEach((optLine) => {
-      const match = optLine.match(OPTION_LINE);
-      if (!match) return; // ligne qui ne ressemble pas à une option, ignorée
-
-      let text = match[2].trim();
-      let isCorrect = false;
-
-      // La bonne réponse est marquée par une étoile en début ou fin de ligne
-      if (text.endsWith('*')) {
-        isCorrect = true;
-        text = text.slice(0, -1).trim();
-      } else if (text.startsWith('*')) {
-        isCorrect = true;
-        text = text.slice(1).trim();
-      }
-
-      const optIndex = options.length;
-      options.push(text);
-      if (isCorrect) {
-        if (indexBonneReponse !== -1) {
-          errors.push(
-            `Question ${questionNumber} : plusieurs bonnes réponses marquées, la première a été retenue.`
-          );
-        } else {
-          indexBonneReponse = optIndex;
-        }
-      }
-    });
-
-    if (options.length < 2) {
-      errors.push(
-        `Question ${questionNumber} : moins de 2 options détectées, ignorée. Vérifiez le format (A) B) C) D)).`
-      );
-      return;
-    }
-
-    if (indexBonneReponse === -1) {
-      errors.push(
-        `Question ${questionNumber} : aucune bonne réponse marquée (attendu : "*"), ignorée.`
-      );
-      return;
+    const domain = typeof item.domain === 'string' && item.domain.trim() ? item.domain.trim() : null;
+    if (domain) {
+      domaineCompte.set(domain, (domaineCompte.get(domain) || 0) + 1);
     }
 
     questions.push({
       ordre: questions.length,
       enonce,
-      options,
-      indexBonneReponse,
+      reponse,
+      domain,
+      sousCategorie: typeof item.subCategory === 'string' ? item.subCategory.trim() || null : null,
+      difficulte: typeof item.difficulty === 'string' ? item.difficulty.trim() || null : null,
+      points: Number.isFinite(item.points) ? item.points : null,
+      tempsLimite: Number.isFinite(item.timeLimit) ? item.timeLimit : null,
     });
   });
 
   if (questions.length === 0 && errors.length === 0) {
-    errors.push('Aucune question détectée. Vérifiez que le texte contient des lignes "Q: ...".');
+    errors.push('Aucune question valide détectée dans le fichier.');
   }
 
-  return { questions, errors };
+  let domaineDetecte = null;
+  let max = 0;
+  for (const [domain, count] of domaineCompte) {
+    if (count > max) {
+      max = count;
+      domaineDetecte = domain;
+    }
+  }
+
+  return { questions, errors, domaineDetecte };
 }
 
-module.exports = { parseQcmText };
+module.exports = { parseQcmJson };

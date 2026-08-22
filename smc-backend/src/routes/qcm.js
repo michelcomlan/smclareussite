@@ -1,7 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { requireAdmin } = require('../middleware/auth');
-const { parseQcmText } = require('../utils/qcmParser');
+const { parseQcmJson } = require('../utils/qcmParser');
 
 const router = express.Router();
 
@@ -83,31 +83,45 @@ router.get('/admin/all', requireAdmin, async (_req, res) => {
 
 /**
  * POST /api/qcm/admin/preview-import
- * body: { texte }
- * Parse le texte SANS rien enregistrer — pour l'aperçu avant publication.
+ * body: { texte } — texte = contenu brut du fichier .json importé
+ * Parse le JSON SANS rien enregistrer — pour l'aperçu avant publication.
+ * Renvoie aussi domaineDetecte pour présélectionner la matière côté admin.
  */
-router.post('/admin/preview-import', requireAdmin, (req, res) => {
+router.post('/admin/preview-import', requireAdmin, async (req, res) => {
   const { texte } = req.body || {};
-  const result = parseQcmText(texte);
-  res.json(result);
+  const result = parseQcmJson(texte);
+
+  // Si un domaine a été détecté, on tente de retrouver la matière correspondante
+  let matiereSuggeree = null;
+  if (result.domaineDetecte) {
+    const { data } = await supabase
+      .from('matiere')
+      .select('id, nom')
+      .ilike('nom', result.domaineDetecte)
+      .maybeSingle();
+    if (data) matiereSuggeree = data;
+  }
+
+  res.json({ ...result, matiereSuggeree });
 });
 
 /**
  * POST /api/qcm/admin
  * body: { titre, niveau, filiere_id, matiere_id, prix, texte, publie }
- * Crée le QCM + ses questions à partir du texte importé.
+ * texte = contenu brut du fichier .json importé (tableau de questions).
+ * Crée le QCM + ses questions (format "fiche de révision").
  */
 router.post('/admin', requireAdmin, async (req, res) => {
   const { titre, niveau, filiere_id, matiere_id, prix, texte, publie } = req.body || {};
 
   if (!titre || !niveau || prix === undefined || !texte) {
-    return res.status(400).json({ error: 'Champs requis manquants (titre, niveau, prix, texte).' });
+    return res.status(400).json({ error: 'Champs requis manquants (titre, niveau, prix, fichier).' });
   }
   if (!['Licence', 'Master'].includes(niveau)) {
     return res.status(400).json({ error: 'Niveau invalide.' });
   }
 
-  const { questions, errors } = parseQcmText(texte);
+  const { questions, errors } = parseQcmJson(texte);
   if (questions.length === 0) {
     return res.status(400).json({ error: 'Aucune question valide détectée.', details: errors });
   }
@@ -132,13 +146,16 @@ router.post('/admin', requireAdmin, async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur lors de la création du QCM.' });
   }
 
-  // 2. Insérer les questions liées
+  // 2. Insérer les questions liées (format fiche : une réponse rédigée par question)
   const rows = questions.map((q) => ({
     qcm_id: qcm.id,
     ordre: q.ordre,
     enonce: q.enonce,
-    options: q.options,
-    index_bonne_reponse: q.indexBonneReponse,
+    reponse: q.reponse,
+    sous_categorie: q.sousCategorie,
+    difficulte: q.difficulte,
+    points: q.points,
+    temps_limite: q.tempsLimite,
   }));
 
   const { error: questionsError } = await supabase.from('question').insert(rows);

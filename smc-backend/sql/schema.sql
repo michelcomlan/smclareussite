@@ -61,8 +61,11 @@ create table if not exists question (
   qcm_id uuid not null references qcm(id) on delete cascade,
   ordre integer not null default 0,
   enonce text not null,
-  options jsonb not null, -- ["Option A", "Option B", "Option C", "Option D"]
-  index_bonne_reponse integer not null, -- index dans le tableau options (0-based)
+  reponse text not null, -- réponse rédigée (format "fiche de révision")
+  sous_categorie text, -- optionnel, ex : "Environnement de l'entreprise"
+  difficulte text, -- optionnel, ex : "Facile" / "Moyen" / "Difficile"
+  points integer, -- optionnel, poids de la question
+  temps_limite integer, -- optionnel, en secondes
   created_at timestamptz not null default now()
 );
 
@@ -97,8 +100,8 @@ create table if not exists tentative_quiz (
   id uuid primary key default gen_random_uuid(),
   qcm_id uuid not null references qcm(id) on delete cascade,
   achat_id uuid not null references achat(id) on delete cascade,
-  reponses jsonb not null, -- [{question_id, index_choisi}]
-  score integer not null, -- nombre de bonnes réponses
+  reponses jsonb not null, -- [{question_id, reussi: true|false}] (auto-évaluation)
+  score integer not null, -- nombre de fiches marquées "réussi"
   score_sur integer not null, -- total de questions
   created_at timestamptz not null default now()
 );

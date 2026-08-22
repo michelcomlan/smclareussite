@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { useAdminAuth } from '../context/AdminAuthContext.jsx';
@@ -6,6 +6,7 @@ import { useAdminAuth } from '../context/AdminAuthContext.jsx';
 export default function AdminImport() {
   const { token } = useAdminAuth();
   const navigate = useNavigate();
+  const fileInputRef = useRef(null);
 
   const [filieres, setFilieres] = useState([]);
   const [matieres, setMatieres] = useState([]);
@@ -16,7 +17,8 @@ export default function AdminImport() {
     matiere_id: '',
     prix: '',
   });
-  const [texte, setTexte] = useState('');
+  const [texte, setTexte] = useState(''); // contenu brut du fichier .json
+  const [nomFichier, setNomFichier] = useState('');
   const [apercu, setApercu] = useState(null);
   const [erreur, setErreur] = useState(null);
   const [chargement, setChargement] = useState(false);
@@ -26,12 +28,31 @@ export default function AdminImport() {
     api.listerMatieres().then(setMatieres).catch(() => {});
   }, []);
 
-  async function genererApercu() {
+  async function onFichierChoisi(e) {
+    const fichier = e.target.files?.[0];
+    if (!fichier) return;
+    setNomFichier(fichier.name);
     setErreur(null);
+    setApercu(null);
+
+    const contenu = await fichier.text();
+    setTexte(contenu);
+
     setChargement(true);
     try {
-      const result = await api.previewImport(token, texte);
+      const result = await api.previewImport(token, contenu);
       setApercu(result);
+
+      // Si une matière a été reconnue automatiquement à partir du fichier,
+      // on la présélectionne (l'admin peut toujours la changer).
+      if (result.matiereSuggeree && !form.matiere_id) {
+        setForm((f) => ({ ...f, matiere_id: result.matiereSuggeree.id }));
+      }
+      // Titre par défaut basé sur le nom du fichier, si pas déjà rempli
+      if (!form.titre) {
+        const titreSuggere = fichier.name.replace(/\.json$/i, '').replace(/_/g, ' ');
+        setForm((f) => ({ ...f, titre: titreSuggere }));
+      }
     } catch (err) {
       setErreur(err.message);
     } finally {
@@ -43,6 +64,10 @@ export default function AdminImport() {
     setErreur(null);
     if (!form.titre || !form.prix) {
       setErreur('Titre et prix sont requis.');
+      return;
+    }
+    if (!texte) {
+      setErreur('Choisissez un fichier .json avant de continuer.');
       return;
     }
     setChargement(true);
@@ -66,6 +91,33 @@ export default function AdminImport() {
   return (
     <div className="max-w-3xl">
       <h1 className="font-display text-2xl mb-8">Importer un QCM</h1>
+
+      <label className="block font-body text-sm font-medium mb-1">
+        Fichier de questions (export QCMmaker, .json)
+      </label>
+      <p className="font-body text-xs text-encre-900/50 mb-2">
+        Chaque question doit avoir au minimum un champ "text" (l'énoncé) et "answer" (la
+        réponse). Les champs "domain", "subCategory", "difficulty", "points" et "timeLimit"
+        sont repris automatiquement s'ils sont présents.
+      </p>
+
+      <div className="mb-6">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={onFichierChoisi}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="px-5 py-2.5 rounded-full border border-encre-900/20 font-body font-medium"
+        >
+          {nomFichier ? 'Changer de fichier' : 'Choisir un fichier .json'}
+        </button>
+        {nomFichier && <span className="ml-3 font-mono text-sm text-encre-900/60">{nomFichier}</span>}
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
         <div>
@@ -113,7 +165,9 @@ export default function AdminImport() {
           </select>
         </div>
         <div>
-          <label className="block font-body text-sm font-medium mb-1">Matière</label>
+          <label className="block font-body text-sm font-medium mb-1">
+            Matière {apercu?.matiereSuggeree && <span className="text-green-700">(détectée)</span>}
+          </label>
           <select
             value={form.matiere_id}
             onChange={(e) => setForm({ ...form, matiere_id: e.target.value })}
@@ -129,33 +183,17 @@ export default function AdminImport() {
         </div>
       </div>
 
-      <label className="block font-body text-sm font-medium mb-1">
-        Texte du QCM (format QCMmaker)
-      </label>
-      <p className="font-mono text-xs text-encre-900/50 mb-2">
-        Q: Énoncé de la question / A) Option B) Option * C) Option D) Option (étoile = bonne
-        réponse)
-      </p>
-      <textarea
-        value={texte}
-        onChange={(e) => setTexte(e.target.value)}
-        rows={12}
-        className="w-full px-4 py-3 rounded-lg border border-encre-900/20 font-mono text-sm mb-4"
-        placeholder={'Q: Quelle est la capitale du Bénin ?\nA) Cotonou\nB) Porto-Novo *\nC) Parakou'}
-      />
-
-      <button
-        onClick={genererApercu}
-        disabled={!texte || chargement}
-        className="font-body text-sm text-indigo-600 underline mb-8 disabled:opacity-40"
-      >
-        Générer l'aperçu
-      </button>
+      {chargement && !apercu && (
+        <p className="font-body text-sm text-encre-900/50 mb-6">Lecture du fichier…</p>
+      )}
 
       {apercu && (
         <div className="mb-8">
           <p className="font-body text-sm font-medium mb-3">
             {apercu.questions.length} question(s) détectée(s)
+            {apercu.domaineDetecte && (
+              <span className="text-encre-900/50"> · matière du fichier : {apercu.domaineDetecte}</span>
+            )}
           </p>
 
           {apercu.errors.length > 0 && (
@@ -168,22 +206,27 @@ export default function AdminImport() {
             </ul>
           )}
 
-          <div className="flex flex-col gap-3">
-            {apercu.questions.map((q, i) => (
+          <div className="flex flex-col gap-3 max-h-[28rem] overflow-y-auto pr-1">
+            {apercu.questions.slice(0, 30).map((q, i) => (
               <div key={i} className="p-4 rounded-xl border border-encre-900/15 bg-white">
-                <p className="font-body text-sm font-medium mb-2">
-                  {i + 1}. {q.enonce}
-                </p>
-                <ul className="font-body text-sm text-encre-900/70 flex flex-col gap-1">
-                  {q.options.map((opt, oi) => (
-                    <li key={oi} className={oi === q.indexBonneReponse ? 'text-green-700' : ''}>
-                      {oi === q.indexBonneReponse ? '✓ ' : '– '}
-                      {opt}
-                    </li>
-                  ))}
-                </ul>
+                <div className="flex items-center gap-2 mb-2">
+                  <p className="font-body text-sm font-medium">
+                    {i + 1}. {q.enonce}
+                  </p>
+                  {q.difficulte && (
+                    <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-encre-900/5 text-encre-900/60">
+                      {q.difficulte}
+                    </span>
+                  )}
+                </div>
+                <p className="font-body text-sm text-green-700">{q.reponse}</p>
               </div>
             ))}
+            {apercu.questions.length > 30 && (
+              <p className="font-body text-xs text-encre-900/40">
+                … et {apercu.questions.length - 30} question(s) de plus (non affichées dans l'aperçu).
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -193,14 +236,14 @@ export default function AdminImport() {
       <div className="flex gap-3">
         <button
           onClick={() => publier(false)}
-          disabled={chargement}
+          disabled={chargement || !apercu}
           className="px-6 py-3 rounded-full border border-encre-900/20 font-body font-medium disabled:opacity-50"
         >
           Enregistrer sans publier
         </button>
         <button
           onClick={() => publier(true)}
-          disabled={chargement}
+          disabled={chargement || !apercu}
           className="px-6 py-3 rounded-full bg-indigo-600 text-creme-50 font-body font-medium disabled:opacity-50"
         >
           Enregistrer et publier

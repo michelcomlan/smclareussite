@@ -33,10 +33,12 @@ export default function Resultat() {
           {score}
           <span className="text-3xl text-encre-900/40"> / {score_sur}</span>
         </p>
-        <p className="font-body text-encre-900/60 mt-3">{pourcentage}% de bonnes réponses</p>
+        <p className="font-body text-encre-900/60 mt-3">
+          {pourcentage}% des fiches marquées « réussi »
+        </p>
       </div>
 
-      <h2 className="font-display text-lg mb-4">Détail des réponses</h2>
+      <h2 className="font-display text-lg mb-4">Détail par fiche</h2>
       <ul className="flex flex-col gap-3">
         {detail.map((d, idx) => {
           const question = questionParId.get(d.question_id);
@@ -44,7 +46,7 @@ export default function Resultat() {
             <li
               key={d.question_id}
               className={`p-4 rounded-xl border font-body text-sm ${
-                d.correct ? 'border-green-600/30 bg-green-50' : 'border-red-600/30 bg-red-50'
+                d.reussi ? 'border-green-600/30 bg-green-50' : 'border-red-600/30 bg-red-50'
               }`}
             >
               <p className="font-medium mb-2">
@@ -52,21 +54,12 @@ export default function Resultat() {
               </p>
               {question && (
                 <p className="text-encre-900/70">
-                  Votre réponse :{' '}
-                  <span className={d.correct ? 'text-green-700' : 'text-red-700'}>
-                    {question.options[d.index_choisi]}
-                  </span>
-                  {!d.correct && (
-                    <>
-                      {' '}
-                      · Bonne réponse :{' '}
-                      <span className="text-green-700">
-                        {question.options[d.index_bonne_reponse]}
-                      </span>
-                    </>
-                  )}
+                  Réponse : <span className="text-encre-900">{question.reponse}</span>
                 </p>
               )}
+              <p className={`mt-2 text-xs font-medium ${d.reussi ? 'text-green-700' : 'text-red-700'}`}>
+                {d.reussi ? '✓ Réussi' : '↺ À revoir'}
+              </p>
             </li>
           );
         })}
