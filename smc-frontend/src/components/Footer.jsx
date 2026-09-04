@@ -11,8 +11,8 @@ export default function Footer() {
           <p>01 97 96 84 70 · sedonoumichel@gmail.com</p>
         </div>
         <div className="flex flex-col gap-1">
-          <Link to="/" className="hover:text-or-400 transition-colors">
-            Catalogue des QCM
+          <Link to="/mes-qcm" className="hover:text-or-400 transition-colors">
+            Mes QCM
           </Link>
           <Link to="/admin" className="hover:text-or-400 transition-colors">
             Espace administrateur

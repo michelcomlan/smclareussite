@@ -10,7 +10,7 @@ const router = express.Router();
 
 const CODE_LENGTH = 6;
 const CODE_EXPIRATION_MINUTES = 10;
-const MAX_TENTATIVES = 5;
+const MAX_TENTATIVES = 10;
 const TOKEN_VERIFICATION_EXPIRATION = '15m';
 
 function genererCode() {
@@ -19,11 +19,11 @@ function genererCode() {
   return String(n).padStart(CODE_LENGTH, '0');
 }
 
-// Anti-spam : max 3 demandes de code / 10 min / numéro (évite qu'on inonde
-// un numéro de SMS, et limite les coûts d'envoi).
+// Anti-spam : max 20 demandes de code / 10 min / numéro
+// (assoupli pour faciliter les tests — reste une protection de base)
 const demandeLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 3,
+  max: 20,
   keyGenerator: (req) => req.body?.telephone || req.ip,
   message: { error: 'Trop de demandes de code pour ce numéro. Réessayez dans quelques minutes.' },
 });
@@ -31,7 +31,7 @@ const demandeLimiter = rateLimit({
 // Anti-bruteforce sur la vérification elle-même (en plus du compteur en base)
 const verificationLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 15,
+  max: 50,
   keyGenerator: (req) => req.body?.telephone || req.ip,
   message: { error: 'Trop de tentatives. Réessayez plus tard.' },
 });

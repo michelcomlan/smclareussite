@@ -6,10 +6,11 @@ const supabase = require('../config/supabase');
 
 const router = express.Router();
 
-// Anti-bruteforce : max 10 tentatives de connexion / 15 min / IP
+// Anti-bruteforce : max 50 tentatives de connexion / 15 min / IP
+// (assoupli pour faciliter les tests — reste une protection de base)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 50,
   message: { error: 'Trop de tentatives de connexion. Réessayez plus tard.' },
 });
 

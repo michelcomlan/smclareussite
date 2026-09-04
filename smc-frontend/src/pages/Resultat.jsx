@@ -1,10 +1,9 @@
 import React from 'react';
-import { useLocation, useParams, Link } from 'react-router-dom';
+import { useLocation, Link } from 'react-router-dom';
 
 export default function Resultat() {
   const location = useLocation();
-  const { qcmId } = useParams();
-  const { resultat, questions } = location.state || {};
+  const { resultat, questions, typeQuiz } = location.state || {};
 
   if (!resultat) {
     return (
@@ -22,6 +21,7 @@ export default function Resultat() {
   const { score, score_sur, detail } = resultat;
   const pourcentage = Math.round((score / score_sur) * 100);
   const questionParId = new Map((questions || []).map((q) => [q.id, q]));
+  const estQcu = typeQuiz === 'qcu';
 
   return (
     <section className="max-w-2xl mx-auto px-6 py-16">
@@ -33,40 +33,52 @@ export default function Resultat() {
           {score}
           <span className="text-3xl text-encre-900/40"> / {score_sur}</span>
         </p>
-        <p className="font-body text-encre-900/60 mt-3">{pourcentage}% de bonnes réponses</p>
+        <p className="font-body text-encre-900/60 mt-3">
+          {estQcu ? `${pourcentage}% de bonnes réponses` : `${pourcentage}% des fiches marquées « réussi »`}
+        </p>
       </div>
 
-      <h2 className="font-display text-lg mb-4">Détail des réponses</h2>
+      <h2 className="font-display text-lg mb-4">{estQcu ? 'Détail par question' : 'Détail par fiche'}</h2>
       <ul className="flex flex-col gap-3">
         {detail.map((d, idx) => {
           const question = questionParId.get(d.question_id);
+          const reussi = estQcu ? d.correct : d.reussi;
           return (
             <li
               key={d.question_id}
               className={`p-4 rounded-xl border font-body text-sm ${
-                d.correct ? 'border-green-600/30 bg-green-50' : 'border-red-600/30 bg-red-50'
+                reussi ? 'border-green-600/30 bg-green-50' : 'border-red-600/30 bg-red-50'
               }`}
             >
               <p className="font-medium mb-2">
                 {idx + 1}. {question?.enonce || 'Question'}
               </p>
-              {question && (
-                <p className="text-encre-900/70">
-                  Votre réponse :{' '}
-                  <span className={d.correct ? 'text-green-700' : 'text-red-700'}>
-                    {question.options[d.index_choisi]}
-                  </span>
+
+              {estQcu && question ? (
+                <>
+                  <p className="text-encre-900/70">
+                    Votre réponse :{' '}
+                    <span className="text-encre-900">
+                      {question.options?.[d.index_choisi] ?? '—'}
+                    </span>
+                  </p>
                   {!d.correct && (
-                    <>
-                      {' '}
-                      · Bonne réponse :{' '}
-                      <span className="text-green-700">
-                        {question.options[d.index_bonne_reponse]}
-                      </span>
-                    </>
+                    <p className="text-green-700 mt-1">
+                      Bonne réponse : {question.options?.[d.index_bonne_reponse]}
+                    </p>
                   )}
-                </p>
+                </>
+              ) : (
+                question && (
+                  <p className="text-encre-900/70">
+                    Réponse : <span className="text-encre-900">{question.reponse}</span>
+                  </p>
+                )
               )}
+
+              <p className={`mt-2 text-xs font-medium ${reussi ? 'text-green-700' : 'text-red-700'}`}>
+                {estQcu ? (reussi ? '✓ Correct' : '✗ Incorrect') : reussi ? '✓ Réussi' : '↺ À revoir'}
+              </p>
             </li>
           );
         })}

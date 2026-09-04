@@ -58,15 +58,15 @@ des webhooks de paiement. **Il faut les confirmer avec la documentation FedaPay
 à jour** (ou un premier webhook de test réel) avant la mise en production, et
 ajuster `src/routes/payment.js` en conséquence si besoin.
 
-## 6. Point de vigilance — format d'import QCM
+## 6. Format d'import QCM (vérifié sur un vrai fichier)
 
-Le parseur (`src/utils/qcmParser.js`) est écrit d'après le format décrit dans le
-cahier des charges (`Q: ... / A) B) C) D) ...` avec `*` pour la bonne réponse).
-
-**Avant de considérer l'import comme fiable : demander à l'admin un vrai fichier
-exporté par QCMmaker et le tester avec `POST /api/qcm/admin/preview-import`.**
-Si le format réel diffère (accents, numérotation, choix multiples...), ajuster le
-parseur — c'est un fichier isolé, facile à modifier sans toucher au reste.
+Le parseur (`src/utils/qcmParser.js`) a été confronté à un vrai export QCMmaker et
+adapté en conséquence. Le format réel est un fichier `.json` contenant un tableau
+d'objets `{ text, answer, domain, subCategory, difficulty, points, timeLimit }` —
+chaque question a une seule réponse rédigée, ce n'est **pas** un QCM à choix
+multiples. Le site fonctionne en mode « fiches de révision » : l'étudiant lit la
+question, révèle la réponse rédigée, puis s'auto-évalue (« réussi » / « à revoir »).
+Le score final est basé sur ces auto-évaluations.
 
 ## 7. Identification de l'étudiant sans compte utilisateur
 

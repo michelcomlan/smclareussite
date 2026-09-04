@@ -7,8 +7,16 @@ const qcmRoutes = require('./routes/qcm');
 const paymentRoutes = require('./routes/payment');
 const quizRoutes = require('./routes/quiz');
 const otpRoutes = require('./routes/otp');
+const etudiantRoutes = require('./routes/etudiant');
+const { router: abonnementRoutes } = require('./routes/abonnement');
+const coursRoutes = require('./routes/cours');
 
 const app = express();
+
+// Render (et la plupart des hébergeurs) placent le serveur derrière un proxy
+// inverse : sans cette ligne, express-rate-limit ne peut pas identifier
+// correctement l'adresse IP de chaque visiteur (avertissement X-Forwarded-For).
+app.set('trust proxy', 1);
 
 // CORS : uniquement le front-end autorisé
 app.use(
@@ -33,6 +41,9 @@ app.use('/api/qcm', qcmRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/quiz', quizRoutes);
 app.use('/api/otp', otpRoutes);
+app.use('/api/etudiant', etudiantRoutes);
+app.use('/api/abonnement', abonnementRoutes);
+app.use('/api/cours', coursRoutes);
 
 // Gestion d'erreur générique (filet de sécurité)
 app.use((err, _req, res, _next) => {

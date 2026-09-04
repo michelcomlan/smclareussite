@@ -61,8 +61,11 @@ create table if not exists question (
   qcm_id uuid not null references qcm(id) on delete cascade,
   ordre integer not null default 0,
   enonce text not null,
-  options jsonb not null, -- ["Option A", "Option B", "Option C", "Option D"]
-  index_bonne_reponse integer not null, -- index dans le tableau options (0-based)
+  reponse text not null, -- réponse rédigée (format "fiche de révision")
+  sous_categorie text, -- optionnel, ex : "Environnement de l'entreprise"
+  difficulte text, -- optionnel, ex : "Facile" / "Moyen" / "Difficile"
+  points integer, -- optionnel, poids de la question
+  temps_limite integer, -- optionnel, en secondes
   created_at timestamptz not null default now()
 );
 
@@ -91,19 +94,63 @@ create index if not exists idx_achat_statut on achat(statut);
 create unique index if not exists idx_achat_reference on achat(reference_transaction) where reference_transaction is not null;
 
 -- ------------------------------------------------------------
+-- Table: etudiant
+-- Inscription gratuite : nom, prénom, filière. Pas de mot de passe à
+-- ce stade. Un numéro de téléphone identifie le compte d'une visite à
+-- l'autre et sert à recevoir le code d'abonnement.
+-- ------------------------------------------------------------
+create table if not exists etudiant (
+  id uuid primary key default gen_random_uuid(),
+  nom text not null,
+  prenom text not null,
+  filiere_id uuid references filiere(id) on delete set null,
+  telephone text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_etudiant_telephone on etudiant(telephone);
+create index if not exists idx_etudiant_filiere on etudiant(filiere_id);
+
+-- ------------------------------------------------------------
+-- Table: abonnement
+-- Un étudiant peut avoir plusieurs lignes au fil des mois (chaque
+-- renouvellement = une nouvelle ligne, pas de prélèvement automatique).
+-- L'abonnement "actif" est celui dont date_fin est dans le futur.
+-- ------------------------------------------------------------
+create table if not exists abonnement (
+  id uuid primary key default gen_random_uuid(),
+  etudiant_id uuid not null references etudiant(id) on delete cascade,
+  statut text not null default 'en_attente' check (statut in ('en_attente', 'actif', 'expire', 'echoue')),
+  montant integer not null default 3000, -- FCFA
+  reference_transaction text unique,
+  code_abonnement text unique,
+  date_debut timestamptz,
+  date_fin timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_abonnement_etudiant on abonnement(etudiant_id);
+create index if not exists idx_abonnement_statut on abonnement(statut);
+
+-- ------------------------------------------------------------
 -- Table: tentative_quiz
+-- Reliée à un étudiant (nouveau modèle par abonnement) ou à un achat
+-- unitaire (ancien modèle, conservé). Au moins l'un des deux est requis.
 -- ------------------------------------------------------------
 create table if not exists tentative_quiz (
   id uuid primary key default gen_random_uuid(),
   qcm_id uuid not null references qcm(id) on delete cascade,
-  achat_id uuid not null references achat(id) on delete cascade,
-  reponses jsonb not null, -- [{question_id, index_choisi}]
-  score integer not null, -- nombre de bonnes réponses
+  achat_id uuid references achat(id) on delete cascade,
+  etudiant_id uuid references etudiant(id) on delete cascade,
+  reponses jsonb not null, -- [{question_id, reussi: true|false}] (auto-évaluation)
+  score integer not null, -- nombre de fiches marquées "réussi"
   score_sur integer not null, -- total de questions
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint tentative_quiz_lien_check check (achat_id is not null or etudiant_id is not null)
 );
 
 create index if not exists idx_tentative_achat on tentative_quiz(achat_id);
+create index if not exists idx_tentative_etudiant on tentative_quiz(etudiant_id);
 
 -- ------------------------------------------------------------
 -- Table: otp_verification
@@ -138,6 +185,27 @@ create table if not exists admin (
   created_at timestamptz not null default now()
 );
 
+-- ------------------------------------------------------------
+-- Table: cours
+-- Cours par chapitre (documents et vidéos), consultables en ligne
+-- sans téléchargement, réservés aux étudiants abonnés à leur filière.
+-- ------------------------------------------------------------
+create table if not exists cours (
+  id uuid primary key default gen_random_uuid(),
+  filiere_id uuid references filiere(id) on delete cascade,
+  matiere_id uuid references matiere(id) on delete set null,
+  chapitre text not null,
+  titre text not null,
+  type text not null check (type in ('document', 'video')),
+  url text not null,
+  ordre integer not null default 0,
+  publie boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_cours_filiere on cours(filiere_id);
+create index if not exists idx_cours_publie on cours(publie);
+
 -- ============================================================
 -- Row Level Security : on bloque l'accès direct depuis le front.
 -- Toutes les écritures/lectures sensibles passent par le back-end
@@ -151,6 +219,9 @@ alter table achat enable row level security;
 alter table tentative_quiz enable row level security;
 alter table admin enable row level security;
 alter table otp_verification enable row level security;
+alter table etudiant enable row level security;
+alter table abonnement enable row level security;
+alter table cours enable row level security;
 
 -- Lecture publique autorisée uniquement pour le catalogue (QCM publiés) et les filtres
 create policy "Lecture publique des filieres" on filiere for select using (true);

@@ -1,23 +1,11 @@
 const express = require('express');
 const crypto = require('crypto');
-const axios = require('axios');
 const supabase = require('../config/supabase');
 const { requireTelephoneVerifie } = require('../middleware/auth');
+const { fedapayClient } = require('../config/fedapay');
+const { DUREE_JOURS, genererCodeAbonnement } = require('./abonnement');
 
 const router = express.Router();
-
-const FEDAPAY_BASE_URL =
-  process.env.FEDAPAY_ENV === 'live'
-    ? 'https://api.fedapay.com/v1'
-    : 'https://sandbox-api.fedapay.com/v1';
-
-const fedapayClient = axios.create({
-  baseURL: FEDAPAY_BASE_URL,
-  headers: {
-    Authorization: `Bearer ${process.env.FEDAPAY_SECRET_KEY}`,
-    'Content-Type': 'application/json',
-  },
-});
 
 /**
  * POST /api/payment/initier
@@ -153,34 +141,50 @@ router.get('/retrouver', requireTelephoneVerifie, async (req, res) => {
  * confiance à son contenu. Sans cette vérification, n'importe qui pourrait
  * appeler cet endpoint pour débloquer un QCM sans payer.
  *
- * Ce endpoint doit être configuré dans le tableau de bord FedaPay avec
- * l'URL publique du back-end (ex: https://api.smclareussite.com/api/payment/webhook).
+ * Ce endpoint doit être configuré dans le tableau de bord FedaPay (section
+ * "Webhooks") avec l'URL publique du back-end
+ * (ex: https://smclareussite.onrender.com/api/payment/webhook).
  *
- * NOTE : vérifier le nom exact du header de signature et l'algorithme dans
- * la documentation FedaPay au moment de l'implémentation (peut évoluer) —
- * le code ci-dessous suit le principe HMAC-SHA256 standard utilisé par la
- * plupart des fournisseurs de paiement.
+ * Format vérifié auprès de la documentation officielle FedaPay : l'en-tête
+ * X-FEDAPAY-SIGNATURE contient "t=<timestamp>,v1=<signature>" (comme Stripe),
+ * où la signature est un HMAC-SHA256 hexadécimal du message
+ * "<timestamp>.<corps brut de la requête>", avec le secret de l'endpoint
+ * webhook (FEDAPAY_WEBHOOK_SECRET, différent de la clé API).
  */
 router.post(
   '/webhook',
   express.raw({ type: 'application/json' }), // on a besoin du corps brut pour vérifier la signature
   async (req, res) => {
-    const signature = req.headers['x-fedapay-signature'];
+    const signatureHeader = req.headers['x-fedapay-signature'];
     const secret = process.env.FEDAPAY_WEBHOOK_SECRET;
 
-    if (!signature || !secret) {
+    if (!signatureHeader || !secret) {
       console.warn('Webhook FedaPay reçu sans signature ou secret non configuré.');
       return res.status(400).json({ error: 'Signature manquante.' });
     }
 
-    const expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(req.body) // req.body est un Buffer brut grâce à express.raw()
-      .digest('hex');
+    // Format du header : "t=<timestamp>,v1=<signature>" (comme Stripe).
+    // Le message signé est "<timestamp>.<corps brut de la requête>".
+    const parties = Object.fromEntries(
+      signatureHeader.split(',').map((p) => {
+        const [cle, valeur] = p.split('=');
+        return [cle, valeur];
+      })
+    );
+    const timestamp = parties.t;
+    const signatureRecue = parties.v1;
+
+    if (!timestamp || !signatureRecue) {
+      console.warn('Webhook FedaPay : en-tête de signature mal formé. Valeur brute reçue :', signatureHeader);
+      return res.status(400).json({ error: 'Signature mal formée.' });
+    }
+
+    const messageSigne = `${timestamp}.${req.body.toString('utf8')}`;
+    const expectedSignature = crypto.createHmac('sha256', secret).update(messageSigne).digest('hex');
 
     const signatureValide =
-      signature.length === expectedSignature.length &&
-      crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
+      signatureRecue.length === expectedSignature.length &&
+      crypto.timingSafeEqual(Buffer.from(signatureRecue), Buffer.from(expectedSignature));
 
     if (!signatureValide) {
       console.warn('Signature webhook FedaPay invalide — requête rejetée.');
@@ -203,8 +207,9 @@ router.post(
       return res.status(400).json({ error: 'Événement sans transaction associée.' });
     }
 
-    // Idempotence : si l'achat est déjà confirmé, on ne refait rien
-    // (empêche un double traitement si FedaPay renvoie le même webhook 2 fois).
+    // Idempotence : on cherche d'abord un achat, puis un abonnement,
+    // correspondant à cette transaction FedaPay — les deux flux de paiement
+    // (QCM unitaire et abonnement mensuel) passent par ce même webhook.
     const { data: achat, error: findError } = await supabase
       .from('achat')
       .select('id, statut')
@@ -215,25 +220,65 @@ router.post(
       console.error('Erreur Supabase (recherche achat webhook):', findError);
       return res.status(500).json({ error: 'Erreur serveur.' });
     }
-    if (!achat) {
-      console.warn(`Webhook reçu pour une transaction inconnue: ${transactionId}`);
-      return res.status(404).json({ error: 'Achat introuvable.' });
+
+    if (achat) {
+      if (achat.statut === 'confirme') {
+        return res.status(200).json({ message: 'Déjà traité.' }); // idempotent
+      }
+
+      if (eventName === 'transaction.approved' || event.entity?.status === 'approved') {
+        await supabase
+          .from('achat')
+          .update({ statut: 'confirme', confirmed_at: new Date().toISOString() })
+          .eq('id', achat.id);
+      } else if (
+        eventName === 'transaction.declined' ||
+        eventName === 'transaction.canceled' ||
+        event.entity?.status === 'declined'
+      ) {
+        await supabase.from('achat').update({ statut: 'echoue' }).eq('id', achat.id);
+      }
+
+      return res.status(200).json({ received: true });
     }
-    if (achat.statut === 'confirme') {
+
+    // Pas trouvé dans les achats unitaires : on regarde du côté des abonnements.
+    const { data: abonnement, error: findAbonnementError } = await supabase
+      .from('abonnement')
+      .select('id, statut')
+      .eq('reference_transaction', transactionId)
+      .maybeSingle();
+
+    if (findAbonnementError) {
+      console.error('Erreur Supabase (recherche abonnement webhook):', findAbonnementError);
+      return res.status(500).json({ error: 'Erreur serveur.' });
+    }
+    if (!abonnement) {
+      console.warn(`Webhook reçu pour une transaction inconnue: ${transactionId}`);
+      return res.status(404).json({ error: 'Transaction introuvable.' });
+    }
+    if (abonnement.statut === 'actif') {
       return res.status(200).json({ message: 'Déjà traité.' }); // idempotent
     }
 
     if (eventName === 'transaction.approved' || event.entity?.status === 'approved') {
+      const dateDebut = new Date();
+      const dateFin = new Date(dateDebut.getTime() + DUREE_JOURS * 24 * 60 * 60 * 1000);
       await supabase
-        .from('achat')
-        .update({ statut: 'confirme', confirmed_at: new Date().toISOString() })
-        .eq('id', achat.id);
+        .from('abonnement')
+        .update({
+          statut: 'actif',
+          date_debut: dateDebut.toISOString(),
+          date_fin: dateFin.toISOString(),
+          code_abonnement: genererCodeAbonnement(),
+        })
+        .eq('id', abonnement.id);
     } else if (
       eventName === 'transaction.declined' ||
       eventName === 'transaction.canceled' ||
       event.entity?.status === 'declined'
     ) {
-      await supabase.from('achat').update({ statut: 'echoue' }).eq('id', achat.id);
+      await supabase.from('abonnement').update({ statut: 'echoue' }).eq('id', abonnement.id);
     }
 
     // FedaPay attend un 200 pour ne pas re-tenter indéfiniment

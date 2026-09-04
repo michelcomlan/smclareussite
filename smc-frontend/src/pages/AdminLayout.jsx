@@ -28,6 +28,12 @@ export default function AdminLayout() {
           <Link to="/admin/import" className={lienActif('/admin/import')}>
             Importer un QCM
           </Link>
+          <Link to="/admin/cours" className={lienActif('/admin/cours')}>
+            Cours
+          </Link>
+          <Link to="/admin/etudiants" className={lienActif('/admin/etudiants')}>
+            Étudiants
+          </Link>
         </nav>
         <button onClick={deconnecter} className="font-body text-sm text-encre-900/50 underline">
           Se déconnecter

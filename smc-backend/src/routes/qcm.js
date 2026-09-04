@@ -1,9 +1,13 @@
 const express = require('express');
+const multer = require('multer');
 const supabase = require('../config/supabase');
 const { requireAdmin } = require('../middleware/auth');
-const { parseQcmText } = require('../utils/qcmParser');
+const { parseQcmJson } = require('../utils/qcmParser');
+const { extraireParagraphes } = require('../utils/docxParser');
+const { parseQuestionsQcu } = require('../utils/qcuParser');
 
 const router = express.Router();
+const uploadMemoire = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ============================================================
 // ROUTES PUBLIQUES (catalogue étudiant)
@@ -19,7 +23,7 @@ router.get('/', async (req, res) => {
 
   let query = supabase
     .from('qcm')
-    .select('id, titre, niveau, filiere_id, matiere_id, nombre_questions, prix, created_at')
+    .select('id, titre, niveau, filiere_id, matiere_id, nombre_questions, prix, type_quiz, created_at')
     .eq('publie', true)
     .order('created_at', { ascending: false });
 
@@ -56,7 +60,7 @@ router.get('/matieres', async (_req, res) => {
 router.get('/:id', async (req, res) => {
   const { data, error } = await supabase
     .from('qcm')
-    .select('id, titre, niveau, filiere_id, matiere_id, nombre_questions, prix, created_at')
+    .select('id, titre, niveau, filiere_id, matiere_id, nombre_questions, prix, type_quiz, created_at')
     .eq('id', req.params.id)
     .eq('publie', true)
     .maybeSingle();
@@ -83,31 +87,45 @@ router.get('/admin/all', requireAdmin, async (_req, res) => {
 
 /**
  * POST /api/qcm/admin/preview-import
- * body: { texte }
- * Parse le texte SANS rien enregistrer — pour l'aperçu avant publication.
+ * body: { texte } — texte = contenu brut du fichier .json importé
+ * Parse le JSON SANS rien enregistrer — pour l'aperçu avant publication.
+ * Renvoie aussi domaineDetecte pour présélectionner la matière côté admin.
  */
-router.post('/admin/preview-import', requireAdmin, (req, res) => {
+router.post('/admin/preview-import', requireAdmin, async (req, res) => {
   const { texte } = req.body || {};
-  const result = parseQcmText(texte);
-  res.json(result);
+  const result = parseQcmJson(texte);
+
+  // Si un domaine a été détecté, on tente de retrouver la matière correspondante
+  let matiereSuggeree = null;
+  if (result.domaineDetecte) {
+    const { data } = await supabase
+      .from('matiere')
+      .select('id, nom')
+      .ilike('nom', result.domaineDetecte)
+      .maybeSingle();
+    if (data) matiereSuggeree = data;
+  }
+
+  res.json({ ...result, matiereSuggeree });
 });
 
 /**
  * POST /api/qcm/admin
  * body: { titre, niveau, filiere_id, matiere_id, prix, texte, publie }
- * Crée le QCM + ses questions à partir du texte importé.
+ * texte = contenu brut du fichier .json importé (tableau de questions).
+ * Crée le QCM + ses questions (format "fiche de révision").
  */
 router.post('/admin', requireAdmin, async (req, res) => {
   const { titre, niveau, filiere_id, matiere_id, prix, texte, publie } = req.body || {};
 
   if (!titre || !niveau || prix === undefined || !texte) {
-    return res.status(400).json({ error: 'Champs requis manquants (titre, niveau, prix, texte).' });
+    return res.status(400).json({ error: 'Champs requis manquants (titre, niveau, prix, fichier).' });
   }
   if (!['Licence', 'Master'].includes(niveau)) {
     return res.status(400).json({ error: 'Niveau invalide.' });
   }
 
-  const { questions, errors } = parseQcmText(texte);
+  const { questions, errors } = parseQcmJson(texte);
   if (questions.length === 0) {
     return res.status(400).json({ error: 'Aucune question valide détectée.', details: errors });
   }
@@ -132,7 +150,102 @@ router.post('/admin', requireAdmin, async (req, res) => {
     return res.status(500).json({ error: 'Erreur serveur lors de la création du QCM.' });
   }
 
-  // 2. Insérer les questions liées
+  // 2. Insérer les questions liées (format fiche : une réponse rédigée par question)
+  const rows = questions.map((q) => ({
+    qcm_id: qcm.id,
+    ordre: q.ordre,
+    enonce: q.enonce,
+    reponse: q.reponse,
+    sous_categorie: q.sousCategorie,
+    difficulte: q.difficulte,
+    points: q.points,
+    temps_limite: q.tempsLimite,
+  }));
+
+  const { error: questionsError } = await supabase.from('question').insert(rows);
+
+  if (questionsError) {
+    console.error('Erreur Supabase (création questions):', questionsError);
+    // Rollback manuel : on supprime le QCM créé pour ne pas laisser un QCM vide
+    await supabase.from('qcm').delete().eq('id', qcm.id);
+    return res.status(500).json({ error: 'Erreur serveur lors de l\'enregistrement des questions.' });
+  }
+
+  res.status(201).json({ qcm, questionsImportees: questions.length, avertissements: errors });
+});
+
+// ============================================================
+// Format QCU (choix unique, A/B/C/D) — import depuis un fichier Word
+// ============================================================
+
+/**
+ * POST /api/qcm/admin/preview-import-qcu
+ * multipart/form-data, champ "fichier" = un .docx
+ * Parse SANS rien enregistrer — pour l'aperçu avant publication.
+ */
+router.post('/admin/preview-import-qcu', requireAdmin, uploadMemoire.single('fichier'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Fichier manquant.' });
+
+  try {
+    const paragraphes = extraireParagraphes(req.file.buffer);
+    const result = parseQuestionsQcu(paragraphes);
+    res.json(result);
+  } catch (err) {
+    console.error('Erreur lecture .docx (aperçu QCU):', err);
+    res.status(400).json({ error: "Impossible de lire ce fichier .docx. Vérifiez qu'il n'est pas corrompu." });
+  }
+});
+
+/**
+ * POST /api/qcm/admin/qcu
+ * multipart/form-data : fichier (.docx) + titre, niveau, filiere_id,
+ * matiere_id, prix, publie (champs texte classiques du formulaire).
+ * Crée un QCM en mode "qcu" (choix unique, correction automatique).
+ */
+router.post('/admin/qcu', requireAdmin, uploadMemoire.single('fichier'), async (req, res) => {
+  const { titre, niveau, filiere_id, matiere_id, prix, publie } = req.body || {};
+
+  if (!req.file) return res.status(400).json({ error: 'Fichier manquant.' });
+  if (!titre || !niveau || prix === undefined) {
+    return res.status(400).json({ error: 'Champs requis manquants (titre, niveau, prix, fichier).' });
+  }
+  if (!['Licence', 'Master'].includes(niveau)) {
+    return res.status(400).json({ error: 'Niveau invalide.' });
+  }
+
+  let questions, errors;
+  try {
+    const paragraphes = extraireParagraphes(req.file.buffer);
+    ({ questions, errors } = parseQuestionsQcu(paragraphes));
+  } catch (err) {
+    console.error('Erreur lecture .docx (création QCU):', err);
+    return res.status(400).json({ error: "Impossible de lire ce fichier .docx." });
+  }
+
+  if (questions.length === 0) {
+    return res.status(400).json({ error: 'Aucune question valide détectée.', details: errors });
+  }
+
+  const { data: qcm, error: qcmError } = await supabase
+    .from('qcm')
+    .insert({
+      titre,
+      niveau,
+      filiere_id: filiere_id || null,
+      matiere_id: matiere_id || null,
+      prix: Number(prix),
+      nombre_questions: questions.length,
+      publie: publie === 'true' || publie === true,
+      type_quiz: 'qcu',
+    })
+    .select()
+    .single();
+
+  if (qcmError) {
+    console.error('Erreur Supabase (création qcm qcu):', qcmError);
+    return res.status(500).json({ error: 'Erreur serveur lors de la création du QCM.' });
+  }
+
   const rows = questions.map((q) => ({
     qcm_id: qcm.id,
     ordre: q.ordre,
@@ -144,10 +257,9 @@ router.post('/admin', requireAdmin, async (req, res) => {
   const { error: questionsError } = await supabase.from('question').insert(rows);
 
   if (questionsError) {
-    console.error('Erreur Supabase (création questions):', questionsError);
-    // Rollback manuel : on supprime le QCM créé pour ne pas laisser un QCM vide
+    console.error('Erreur Supabase (création questions qcu):', questionsError);
     await supabase.from('qcm').delete().eq('id', qcm.id);
-    return res.status(500).json({ error: 'Erreur serveur lors de l\'enregistrement des questions.' });
+    return res.status(500).json({ error: "Erreur serveur lors de l'enregistrement des questions." });
   }
 
   res.status(201).json({ qcm, questionsImportees: questions.length, avertissements: errors });
